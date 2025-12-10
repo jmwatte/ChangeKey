@@ -1,0 +1,37 @@
+# PowerShell specific
+*.ps1xml
+
+# Build artifacts
+*.zip
+build/
+dist/
+
+# Test results
+TestResults/
+*.trx
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+
+# Audio test files (optional - comment out if you want to track test files)
+*.mp3
+*.flac
+*.wav
+
+# IDE specific
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
