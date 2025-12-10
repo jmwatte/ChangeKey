@@ -225,7 +225,20 @@ function Invoke-ChangeKey {
                         throw "Output file already exists: $outputPath. Use -Force to overwrite."
                     }
                     
-                    Copy-Item -Path $InputFile -Destination $outputPath -Force
+                    # Extract existing title tag and append key suffix
+                    $titleOutput = & $script:KeyChangerConfig.FfmpegExe -i $InputFilePath -f ffmetadata - 2>&1 | Where-Object { $_ -match '^title=' }
+                    $existingTitle = if ($titleOutput -match '^title=(.*)$') { $matches[1] } else { $FileInfo.BaseName }
+                    $newTitle = "${existingTitle}_in_$TargetKey"
+                    
+                    # Copy file with updated title tag
+                    $copyArgs = @('-i', $InputFilePath, '-map', '0', '-codec', 'copy', '-metadata', "title=$newTitle", $outputPath, '-y')
+                    $result = & $script:KeyChangerConfig.FfmpegExe @copyArgs 2>&1
+                    
+                    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $outputPath)) {
+                        Write-Host "FFmpeg output: $result" -ForegroundColor Yellow
+                        throw "Failed to copy file with updated metadata"
+                    }
+                    
                     Write-Host "  [5/5] Complete!" -ForegroundColor Green
                     
                     return [PSCustomObject]@{
