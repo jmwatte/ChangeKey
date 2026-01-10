@@ -23,7 +23,9 @@ function Invoke-ChangeKey {
         Folder where the converted file will be saved.
 
     .PARAMETER TargetKey
-        The desired key for the output file (e.g., 'C', 'D', 'E').
+        The desired key(s) for the output file. Can be a single key (e.g., 'C') or multiple keys (e.g., 'C','G').
+        When multiple keys are specified, the function automatically selects the closest key to the source key
+        (smallest semitone shift). In case of a tie, the key requiring a downward shift is preferred.
 
     .PARAMETER Force
         Overwrite the output file if it already exists.
@@ -37,6 +39,14 @@ function Invoke-ChangeKey {
     .EXAMPLE
         # Specify source key manually (skips auto-detection)
         Invoke-ChangeKey -InputFile "song.mp3" -OutputFolder ".\Output" -SourceKey "Bb" -TargetKey "C"
+
+    .EXAMPLE
+        # Multiple target keys - automatically picks the closest one
+        Invoke-ChangeKey -InputFile "song.mp3" -OutputFolder ".\Output" -TargetKey "C","G"
+
+    .EXAMPLE
+        # If song is in D, and targets are C,G - C is 2 semitones down, G is 5 up, so C is chosen
+        Invoke-ChangeKey -InputFile "song.mp3" -OutputFolder ".\Output" -TargetKey "C","G"
     #>
     [CmdletBinding()]
     param(
@@ -54,7 +64,7 @@ function Invoke-ChangeKey {
 
         [Parameter(Mandatory = $true)]
         [ValidateSet('C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B')]
-        [string]$TargetKey,
+        [string[]]$TargetKey,
 
         [Parameter()]
         [switch]$Force
@@ -203,7 +213,7 @@ function Invoke-ChangeKey {
                             InputFile = $InputFilePath
                             OutputFile = $null
                             SourceKey = 'Unknown'
-                            TargetKey = $TargetKey
+                            TargetKey = ($TargetKey -join ',')
                             SemitoneShift = 0
                             Status = 'Skipped - Key detection failed'
                         }
@@ -212,13 +222,46 @@ function Invoke-ChangeKey {
 
                 # Step 3: Calculate semitone difference
                 Write-Host "  [3/5] Calculating semitone shift..." -ForegroundColor Gray
-                Write-Verbose "Calculating semitone difference from $detectedKey to $TargetKey..."
-                $semitones = Get-SemitoneDifference -SourceKey $detectedKey -TargetKey $TargetKey
+                
+                # If multiple target keys provided, find the closest one
+                $selectedTargetKey = $null
+                $semitones = $null
+                
+                if ($TargetKey.Count -eq 1) {
+                    $selectedTargetKey = $TargetKey[0]
+                    Write-Verbose "Single target key specified: $selectedTargetKey"
+                }
+                else {
+                    Write-Host "    Evaluating $($TargetKey.Count) target keys: $($TargetKey -join ', ')" -ForegroundColor DarkGray
+                    
+                    # Calculate distance to each target key
+                    $candidates = foreach ($key in $TargetKey) {
+                        $diff = Get-SemitoneDifference -SourceKey $detectedKey -TargetKey $key
+                        [PSCustomObject]@{
+                            Key = $key
+                            Semitones = $diff
+                            AbsDistance = [Math]::Abs($diff)
+                        }
+                    }
+                    
+                    # Sort by absolute distance, then by semitones (prefer negative/lower pitch on tie)
+                    $closest = $candidates | Sort-Object AbsDistance, Semitones | Select-Object -First 1
+                    $selectedTargetKey = $closest.Key
+                    
+                    Write-Verbose "Target key distances from $detectedKey :"
+                    foreach ($c in $candidates) {
+                        Write-Verbose "  $($c.Key): $($c.Semitones) semitones (abs: $($c.AbsDistance))"
+                    }
+                    Write-Host "    Selected closest key: $selectedTargetKey (from source $detectedKey)" -ForegroundColor Green
+                }
+                
+                Write-Verbose "Calculating semitone difference from $detectedKey to $selectedTargetKey..."
+                $semitones = Get-SemitoneDifference -SourceKey $detectedKey -TargetKey $selectedTargetKey
                 Write-Verbose "Calculated shift: $semitones semitones"
                 
                 if ($semitones -eq 0) {
-                    Write-Host "    File is already in key $TargetKey. Copying original file..." -ForegroundColor Yellow
-                    $outputFileName = "${FileName}_in_${TargetKey}${Extension}"
+                    Write-Host "    File is already in key $selectedTargetKey. Copying original file..." -ForegroundColor Yellow
+                    $outputFileName = "${FileName}_in_${selectedTargetKey}${Extension}"
                     $outputPath = Join-Path $OutputFolder $outputFileName
                     
                     if ((Test-Path $outputPath) -and -not $Force) {
@@ -228,7 +271,7 @@ function Invoke-ChangeKey {
                     # Extract existing title tag and append key suffix
                     $titleOutput = & $script:KeyChangerConfig.FfmpegExe -i $InputFilePath -f ffmetadata - 2>&1 | Where-Object { $_ -match '^title=' }
                     $existingTitle = if ($titleOutput -match '^title=(.*)$') { $matches[1] } else { $FileInfo.BaseName }
-                    $newTitle = "${existingTitle}_in_$TargetKey"
+                    $newTitle = "${existingTitle}_in_$selectedTargetKey"
                     
                     # Copy file with updated title tag
                     $copyArgs = @('-i', $InputFilePath, '-map', '0', '-codec', 'copy', '-metadata', "title=$newTitle", $outputPath, '-y')
@@ -245,7 +288,7 @@ function Invoke-ChangeKey {
                         InputFile = $InputFilePath.Path
                         OutputFile = $outputPath
                         SourceKey = $detectedKey
-                        TargetKey = $TargetKey
+                        TargetKey = $selectedTargetKey
                         SemitoneShift = 0
                         Status = 'Copied (already in target key)'
                     }
@@ -306,7 +349,7 @@ function Invoke-ChangeKey {
 
                 # Step 5: Convert back to original format
                 Write-Host "  [5/5] Converting to $($Extension.ToUpper().TrimStart('.'))..." -ForegroundColor Gray
-                $outputFileName = "${FileName}_in_${TargetKey}${Extension}"
+                $outputFileName = "${FileName}_in_${selectedTargetKey}${Extension}"
                 $outputPath = Join-Path $OutputFolder $outputFileName
                 
                 if ((Test-Path $outputPath) -and -not $Force) {
@@ -320,7 +363,7 @@ function Invoke-ChangeKey {
                 # Extract existing title tag from original file
                 $titleOutput = & $script:KeyChangerConfig.FfmpegExe -i $InputFilePath -f ffmetadata - 2>&1 | Where-Object { $_ -match '^title=' }
                 $existingTitle = if ($titleOutput -match '^title=(.*)$') { $matches[1] } else { $FileInfo.BaseName }
-                $newTitle = "${existingTitle}_in_$TargetKey"
+                $newTitle = "${existingTitle}_in_$selectedTargetKey"
                 Write-Verbose "Original title: $existingTitle"
                 Write-Verbose "New title: $newTitle"
                 
@@ -347,7 +390,7 @@ function Invoke-ChangeKey {
                     InputFile = $InputFilePath.Path
                     OutputFile = $outputPath
                     SourceKey = $detectedKey
-                    TargetKey = $TargetKey
+                    TargetKey = $selectedTargetKey
                     SemitoneShift = $semitones
                     Status = 'Success'
                 }
