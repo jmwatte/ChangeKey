@@ -1,26 +1,34 @@
 function Find-Key {
     <#
     .SYNOPSIS
-        Detects the musical key of audio files and logs the results to a file.
+        Detects the musical key of audio files and outputs results as objects (optionally logs to a file).
 
     .DESCRIPTION
         Processes MP3 or FLAC audio files to detect their musical key using keyfinder-cli.exe.
-        Outputs the results to a specified log file in comma-delimited format: "filepath,key"
+        Outputs results as PowerShell objects with Path and Key properties.
+        If -Output is specified, also writes results to a file in comma-delimited format: "filepath,key".
 
     .PARAMETER Path
         Path to the input audio file(s) (MP3 or FLAC). Supports pipeline input.
 
     .PARAMETER Output
-        Path to the output log file where results will be written.
+        Optional path to the output log file where results will be written in comma-delimited format.
 
     .EXAMPLE
-        Find-Key -Path "song.mp3" -Output "keys.log"
+        Find-Key -Path "song.mp3"
+        # Outputs object to terminal: Path: C:\path\song.mp3, Key: C
 
     .EXAMPLE
-        Get-ChildItem *.mp3 | Find-Key -Output "keys.log"
+        Get-ChildItem *.mp3 | Find-Key | Format-Table
+        # Displays results in a table in the terminal.
 
     .EXAMPLE
         Find-Key -Path @("song1.mp3", "song2.flac") -Output "keys.log"
+        # Outputs objects to pipeline and writes to keys.log.
+
+    .EXAMPLE
+        Find-Key -Path "song.mp3" | Export-Csv -Path "keys.csv" -NoTypeInformation
+        # Pipes objects to CSV export.
     #>
     [CmdletBinding()]
     param(
@@ -29,7 +37,7 @@ function Find-Key {
         [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
         [string[]]$Path,
 
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)]
         [string]$Output
     )
 
@@ -41,11 +49,13 @@ function Find-Key {
             throw "keyfinder-cli.exe not found at: $($script:KeyChangerConfig.KeyFinderExe)"
         }
 
-        # Initialize output file
-        if (Test-Path $Output) {
-            Remove-Item $Output -Force
+        # Initialize output file if specified
+        if ($Output) {
+            if (Test-Path $Output) {
+                Remove-Item $Output -Force
+            }
+            New-Item -Path $Output -ItemType File -Force | Out-Null
         }
-        New-Item -Path $Output -ItemType File -Force | Out-Null
     }
 
     process {
@@ -82,7 +92,7 @@ function Find-Key {
                         '-y'
                     )
 
-                    $result = & $script:KeyChangerConfig.FfmpegExe @ffmpegArgs 2>&1
+                    & $script:KeyChangerConfig.FfmpegExe @ffmpegArgs 2>&1 | Out-Null
                     if ($LASTEXITCODE -ne 0) {
                         throw "FFmpeg conversion failed for $resolvedPath"
                     }
@@ -116,13 +126,27 @@ function Find-Key {
 
                     if ($detectedKey) {
                         Write-Host "  Detected key: $detectedKey" -ForegroundColor Green
-                        # Write to output file
-                        "$resolvedPath,$detectedKey" | Out-File -FilePath $Output -Append -Encoding UTF8
+                        # Output object to pipeline
+                        [PSCustomObject]@{
+                            Path = $resolvedPath
+                            Key  = $detectedKey
+                        }
+                        # Write to file if specified
+                        if ($Output) {
+                            "$resolvedPath,$detectedKey" | Out-File -FilePath $Output -Append -Encoding UTF8
+                        }
                     }
                     else {
                         Write-Host "  Key detection failed for: $($fileInfo.Name)" -ForegroundColor Yellow
-                        # Write with unknown key
-                        "$resolvedPath,Unknown" | Out-File -FilePath $Output -Append -Encoding UTF8
+                        # Output object with unknown key
+                        [PSCustomObject]@{
+                            Path = $resolvedPath
+                            Key  = "Unknown"
+                        }
+                        # Write to file if specified
+                        if ($Output) {
+                            "$resolvedPath,Unknown" | Out-File -FilePath $Output -Append -Encoding UTF8
+                        }
                     }
                 }
                 finally {
@@ -134,13 +158,24 @@ function Find-Key {
             }
             catch {
                 Write-Error "Failed to process $filePath`: $_"
-                # Write error to output
-                "$resolvedPath,Error" | Out-File -FilePath $Output -Append -Encoding UTF8
+                # Output object with error
+                [PSCustomObject]@{
+                    Path = $resolvedPath
+                    Key  = "Error"
+                }
+                # Write to file if specified
+                if ($Output) {
+                    "$resolvedPath,Error" | Out-File -FilePath $Output -Append -Encoding UTF8
+                }
             }
         }
     }
 
     end {
-        Write-Host "Key detection complete. Results saved to: $Output" -ForegroundColor Green
+        if ($Output) {
+            Write-Host "Key detection complete. Results saved to: $Output" -ForegroundColor Green
+        } else {
+            Write-Host "Key detection complete." -ForegroundColor Green
+        }
     }
 }
