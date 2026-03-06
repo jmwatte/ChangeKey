@@ -11,10 +11,16 @@ function Invoke-ChangeKey {
         3. Calculates the semitone difference
         4. Pitch-shifts the audio using soundstretch.exe
         5. Converts back to the original format using ffmpeg
-        6. Saves to the output folder with "_in_[Key]" suffix
+        6. Saves to the output folder with "_[SourceKey]_to_[TargetKey]" suffix
+
+        Supports Low- register keys for diatonic harmonicas (e.g., 'Low-C', 'Low-Bb').
+        Low register is one octave (12 semitones) below normal. You can transpose between
+        registers (e.g., Low-C to C = +12 semitones) or within the same register.
 
     .PARAMETER SourceKey
         The original key of the audio file (optional - if not provided, will attempt auto-detection).
+        Supports normal keys (C, Bb, etc.) and low register keys (Low-C, Low-Bb, etc.).
+        Note: auto-detection always returns normal register keys. Use this parameter to specify Low- keys.
 
     .PARAMETER InputFile
         Path to the input audio file (MP3 or FLAC).
@@ -24,6 +30,7 @@ function Invoke-ChangeKey {
 
     .PARAMETER TargetKey
         The desired key(s) for the output file. Can be a single key (e.g., 'C') or multiple keys (e.g., 'C','G').
+        Supports normal keys and Low- register keys (e.g., 'Low-C', 'Low-D').
         When multiple keys are specified, the function automatically selects the closest key to the source key
         (smallest semitone shift). In case of a tie, the key requiring a downward shift is preferred.
 
@@ -41,11 +48,15 @@ function Invoke-ChangeKey {
         Invoke-ChangeKey -InputFile "song.mp3" -OutputFolder ".\Output" -SourceKey "Bb" -TargetKey "C"
 
     .EXAMPLE
-        # Multiple target keys - automatically picks the closest one
-        Invoke-ChangeKey -InputFile "song.mp3" -OutputFolder ".\Output" -TargetKey "C","G"
+        # Transpose from Low-C harmonica to normal C (+12 semitones / one octave up)
+        Invoke-ChangeKey -InputFile "song.mp3" -OutputFolder ".\Output" -SourceKey "Low-C" -TargetKey "C"
 
     .EXAMPLE
-        # If song is in D, and targets are C,G - C is 2 semitones down, G is 5 up, so C is chosen
+        # Transpose from normal D to Low-D (-12 semitones / one octave down)
+        Invoke-ChangeKey -InputFile "song.mp3" -OutputFolder ".\Output" -SourceKey "D" -TargetKey "Low-D"
+
+    .EXAMPLE
+        # Multiple target keys - automatically picks the closest one
         Invoke-ChangeKey -InputFile "song.mp3" -OutputFolder ".\Output" -TargetKey "C","G"
     #>
     [CmdletBinding()]
@@ -59,11 +70,17 @@ function Invoke-ChangeKey {
         [string]$OutputFolder,
 
         [Parameter(Mandatory = $false)]
-        [ValidateSet('C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B')]
+        [ValidateSet(
+            'C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B',
+            'Low-C', 'Low-C#', 'Low-Db', 'Low-D', 'Low-D#', 'Low-Eb', 'Low-E', 'Low-F', 'Low-F#', 'Low-Gb', 'Low-G', 'Low-G#', 'Low-Ab', 'Low-A', 'Low-A#', 'Low-Bb', 'Low-B'
+        )]
         [string]$SourceKey,
 
         [Parameter(Mandatory = $true)]
-        [ValidateSet('C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B')]
+        [ValidateSet(
+            'C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B',
+            'Low-C', 'Low-C#', 'Low-Db', 'Low-D', 'Low-D#', 'Low-Eb', 'Low-E', 'Low-F', 'Low-F#', 'Low-Gb', 'Low-G', 'Low-G#', 'Low-Ab', 'Low-A', 'Low-A#', 'Low-Bb', 'Low-B'
+        )]
         [string[]]$TargetKey,
 
         [Parameter()]
@@ -261,7 +278,7 @@ function Invoke-ChangeKey {
                 
                 if ($semitones -eq 0) {
                     Write-Host "    File is already in key $selectedTargetKey. Copying original file..." -ForegroundColor Yellow
-                    $outputFileName = "${FileName}_in_${selectedTargetKey}${Extension}"
+                    $outputFileName = "${FileName}_${detectedKey}_to_${selectedTargetKey}${Extension}"
                     $outputPath = Join-Path $OutputFolder $outputFileName
                     
                     if ((Test-Path $outputPath) -and -not $Force) {
@@ -271,7 +288,7 @@ function Invoke-ChangeKey {
                     # Extract existing title tag and append key suffix
                     $titleOutput = & $script:KeyChangerConfig.FfmpegExe -i $InputFilePath -f ffmetadata - 2>&1 | Where-Object { $_ -match '^title=' }
                     $existingTitle = if ($titleOutput -match '^title=(.*)$') { $matches[1] } else { $FileInfo.BaseName }
-                    $newTitle = "${existingTitle}_in_$selectedTargetKey"
+                    $newTitle = "${existingTitle}_${detectedKey}_to_${selectedTargetKey}"
                     
                     # Copy file with updated title tag
                     $copyArgs = @('-i', $InputFilePath, '-map', '0', '-codec', 'copy', '-metadata', "title=$newTitle", $outputPath, '-y')
@@ -295,6 +312,10 @@ function Invoke-ChangeKey {
                 }
                 
                 Write-Host "    Shift: $semitones semitones" -ForegroundColor Green
+
+                if ([Math]::Abs($semitones) -gt 12) {
+                    Write-Warning "Large pitch shift of $semitones semitones. Audio quality may degrade with shifts beyond one octave."
+                }
 
                 # Step 4: Pitch shift with soundstretch
                 Write-Host "  [4/5] Pitch shifting audio..." -ForegroundColor Gray
@@ -349,7 +370,7 @@ function Invoke-ChangeKey {
 
                 # Step 5: Convert back to original format
                 Write-Host "  [5/5] Converting to $($Extension.ToUpper().TrimStart('.'))..." -ForegroundColor Gray
-                $outputFileName = "${FileName}_in_${selectedTargetKey}${Extension}"
+                $outputFileName = "${FileName}_${detectedKey}_to_${selectedTargetKey}${Extension}"
                 $outputPath = Join-Path $OutputFolder $outputFileName
                 
                 if ((Test-Path $outputPath) -and -not $Force) {
@@ -363,7 +384,7 @@ function Invoke-ChangeKey {
                 # Extract existing title tag from original file
                 $titleOutput = & $script:KeyChangerConfig.FfmpegExe -i $InputFilePath -f ffmetadata - 2>&1 | Where-Object { $_ -match '^title=' }
                 $existingTitle = if ($titleOutput -match '^title=(.*)$') { $matches[1] } else { $FileInfo.BaseName }
-                $newTitle = "${existingTitle}_in_$selectedTargetKey"
+                $newTitle = "${existingTitle}_${detectedKey}_to_${selectedTargetKey}"
                 Write-Verbose "Original title: $existingTitle"
                 Write-Verbose "New title: $newTitle"
                 

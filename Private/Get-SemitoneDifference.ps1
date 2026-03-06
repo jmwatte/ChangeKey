@@ -6,15 +6,27 @@ function Get-SemitoneDifference {
     .DESCRIPTION
         Internal helper function that calculates how many semitones apart two keys are.
         Handles enharmonic equivalents (e.g., C# and Db are the same).
+        Supports Low- register keys (e.g., Low-C, Low-Bb) which are one octave (12 semitones) below normal.
+        When both keys are in the same register, returns the shortest path (-6 to +6).
+        When keys are in different registers, returns the full distance (octave jump is intentional).
 
     .PARAMETER SourceKey
-        The starting musical key.
+        The starting musical key. Supports normal keys (C, Bb) and low register keys (Low-C, Low-Bb).
 
     .PARAMETER TargetKey
-        The destination musical key.
+        The destination musical key. Supports normal keys (C, Bb) and low register keys (Low-C, Low-Bb).
 
     .EXAMPLE
         Get-SemitoneDifference -SourceKey "Bb" -TargetKey "C"
+        # Returns 2
+
+    .EXAMPLE
+        Get-SemitoneDifference -SourceKey "Low-C" -TargetKey "C"
+        # Returns 12 (one octave up)
+
+    .EXAMPLE
+        Get-SemitoneDifference -SourceKey "C" -TargetKey "Low-C"
+        # Returns -12 (one octave down)
     #>
     [CmdletBinding()]
     param(
@@ -24,6 +36,12 @@ function Get-SemitoneDifference {
         [Parameter(Mandatory = $true)]
         [string]$TargetKey
     )
+
+    # Parse Low- register prefix
+    $sourceIsLow = $SourceKey.StartsWith('Low-')
+    $targetIsLow = $TargetKey.StartsWith('Low-')
+    $sourceBase = if ($sourceIsLow) { $SourceKey.Substring(4) } else { $SourceKey }
+    $targetBase = if ($targetIsLow) { $TargetKey.Substring(4) } else { $TargetKey }
 
     # Map all keys to their chromatic scale position (0-11)
     $KeyMap = @{
@@ -41,18 +59,24 @@ function Get-SemitoneDifference {
         'B' = 11
     }
 
-    $SourcePosition = $KeyMap[$SourceKey]
-    $TargetPosition = $KeyMap[$TargetKey]
+    # Calculate absolute positions (Low register = base position - 12)
+    $SourcePosition = $KeyMap[$sourceBase]
+    if ($sourceIsLow) { $SourcePosition -= 12 }
 
-    # Calculate shortest distance (can go up or down)
+    $TargetPosition = $KeyMap[$targetBase]
+    if ($targetIsLow) { $TargetPosition -= 12 }
+
     $Difference = $TargetPosition - $SourcePosition
-    
-    # Normalize to -6 to +6 range (shortest path on chromatic circle)
-    if ($Difference -gt 6) {
-        $Difference = $Difference - 12
-    }
-    elseif ($Difference -lt -6) {
-        $Difference = $Difference + 12
+
+    # Only normalize to shortest path when both keys are in the same register
+    # Cross-register shifts are intentional octave jumps — don't normalize
+    if ($sourceIsLow -eq $targetIsLow) {
+        if ($Difference -gt 6) {
+            $Difference = $Difference - 12
+        }
+        elseif ($Difference -lt -6) {
+            $Difference = $Difference + 12
+        }
     }
 
     return $Difference
